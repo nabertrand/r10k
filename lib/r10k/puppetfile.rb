@@ -207,6 +207,10 @@ class Puppetfile
       @librarian.set_moduledir(location)
     end
 
+    def exclusion(name)
+      # Ignore librarian-puppet exclusion declaration
+    end
+
     def method_missing(method, *args)
       raise NoMethodError, _("unrecognized declaration '%{method}'") % {method: method}
     end
