@@ -65,6 +65,11 @@ module R10K
           end
         ensure
           if (postcmd = @settings[:postrun])
+            if postcmd.grep('$modifiedenvs').any?
+              envs = deployment.environments.map { |e| e.dirname }
+              envs.reject! { |e| !@argv.include?(e) } if @argv.any?
+              postcmd = postcmd.map { |e| e.gsub('$modifiedenvs', envs.join(' ')) }
+            end
             subproc = R10K::Util::Subprocess.new(postcmd)
             subproc.logger = logger
             subproc.execute
@@ -124,7 +129,7 @@ module R10K
         end
 
         def visit_puppetfile(puppetfile)
-          puppetfile.load
+          puppetfile.load(@opts[:'default-branch-override'])
 
           yield
 
@@ -140,11 +145,24 @@ module R10K
         end
 
         def write_environment_info!(environment, started_at, success)
+          module_deploys = []
+          begin
+            environment.puppetfile.modules.each do |mod|
+              name = mod.name
+              version = mod.version
+              sha = mod.repo.head rescue nil
+              module_deploys.push({:name => name, :version => version, :sha => sha})
+            end
+          rescue
+            logger.debug("Unable to get environment module deploy data for .r10k-deploy.json at #{environment.path}")
+          end
+
           File.open("#{environment.path}/.r10k-deploy.json", 'w') do |f|
             deploy_info = environment.info.merge({
               :started_at => started_at,
               :finished_at => Time.new,
               :deploy_success => success,
+              :module_deploys => module_deploys,
             })
 
             f.puts(JSON.pretty_generate(deploy_info))
@@ -161,7 +179,12 @@ module R10K
         end
 
         def allowed_initialize_opts
-          super.merge(puppetfile: :self, cachedir: :self, 'no-force': :self, 'generate-types': :self, 'puppet-path': :self)
+          super.merge(puppetfile: :self,
+                      cachedir: :self,
+                      'no-force': :self,
+                      'generate-types': :self,
+                      'puppet-path': :self,
+                      'default-branch-override': :self)
         end
       end
     end

@@ -1,3 +1,4 @@
+require 'thread'
 require 'pathname'
 require 'r10k/module'
 require 'r10k/util/purgeable'
@@ -6,6 +7,10 @@ require 'r10k/errors'
 module R10K
 class Puppetfile
   # Defines the data members of a Puppetfile
+
+  include R10K::Settings::Mixin
+
+  def_setting_attr :pool_size, 1
 
   include R10K::Logging
 
@@ -46,7 +51,10 @@ class Puppetfile
     @basedir         = basedir
     @force           = force || false
     @moduledir       = moduledir  || File.join(basedir, 'modules')
-    @puppetfile_path = puppetfile_path || File.join(basedir, 'Puppetfile')
+    @puppetfile_name = puppetfile_name || 'Puppetfile'
+    @puppetfile_path = puppetfile_path || File.join(basedir, @puppetfile_name)
+
+    logger.info _("Using Puppetfile '%{puppetfile}'") % {puppetfile: @puppetfile_path}
 
     @modules = []
     @managed_content = {}
@@ -55,37 +63,43 @@ class Puppetfile
     @loaded = false
   end
 
-  def load
+  def load(default_branch_override = nil)
     if File.readable? @puppetfile_path
-      self.load!
+      self.load!(default_branch_override)
     else
       logger.debug _("%{dirname}: Puppetfile %{path} missing or unreadable") % {dirname: dirname, path: @puppetfile_path.inspect}
     end
   end
 
-  def load!
+  def load!(default_branch_override = nil)
+    @default_branch_override = default_branch_override
+
     dsl = R10K::Puppetfile::DSL.new(self)
     dsl.instance_eval(puppetfile_contents, @puppetfile_path)
+    
     validate_no_duplicate_names(@modules)
     @loaded = true
-  rescue SyntaxError, LoadError, ArgumentError => e
+  rescue SyntaxError, LoadError, ArgumentError, NameError => e
     raise R10K::Error.wrap(e, _("%{dirname}: Failed to evaluate %{path}") % {dirname: dirname, path: @puppetfile_path})
-  end
-
-  # @param [String] forge
-  def set_forge(forge)
-    @forge = forge
   end
 
   # @param [Array<String>] modules
   def validate_no_duplicate_names(modules)
     dupes = modules
             .group_by { |mod| mod.name }
-            .select { |_, v| v.size > 1 }.map(&:first)
+            .select { |_, v| v.size > 1 }
+            .map(&:first)
     unless dupes.empty?
-      logger.warn _("%{dirname}: Puppetfiles should not contain duplicate module names and will result in an error in r10k v3.x." % {dirname: dirname})
-      logger.warn _("%{dirname}: Remove the duplicates of the following modules: %{dupes}" % {dirname: dirname, dupes: dupes.join(" ")})
+      msg = _('Puppetfiles cannot contain duplicate module names.')
+      msg += ' '
+      msg += _("Remove the duplicates of the following modules: %{dupes}" % { dupes: dupes.join(' ') })
+      raise R10K::Error.new(msg)
     end
+  end
+
+  # @param [String] forge
+  def set_forge(forge)
+    @forge = forge
   end
 
   # @param [String] moduledir
@@ -105,6 +119,10 @@ class Puppetfile
       validate_install_path(install_path, name)
     else
       install_path = @moduledir
+    end
+
+    if args.is_a?(Hash) && @default_branch_override != nil
+      args[:default_branch] = @default_branch_override
     end
 
     # Keep track of all the content this Puppetfile is managing to enable purging.
@@ -146,6 +164,17 @@ class Puppetfile
   end
 
   def accept(visitor)
+    pool_size = self.settings[:pool_size]
+    if pool_size > 1
+      concurrent_accept(visitor, pool_size)
+    else
+      serial_accept(visitor)
+    end
+  end
+
+  private
+
+  def serial_accept(visitor)
     visitor.visit(:puppetfile, self) do
       modules.each do |mod|
         mod.accept(visitor)
@@ -153,7 +182,31 @@ class Puppetfile
     end
   end
 
-  private
+  def concurrent_accept(visitor, pool_size)
+    logger.debug _("Updating modules with %{pool_size} threads") % {pool_size: pool_size}
+    mods_queue = modules_queue(visitor)
+    thread_pool = pool_size.times.map { visitor_thread(visitor, mods_queue) }
+    thread_pool.each(&:join)
+  end
+
+  def modules_queue(visitor)
+    Queue.new.tap do |queue|
+      visitor.visit(:puppetfile, self) do
+        modules.each { |mod| queue << mod }
+      end
+    end
+  end
+
+  def visitor_thread(visitor, mods_queue)
+    Thread.new do
+      begin
+        while mod = mods_queue.pop(true) do mod.accept(visitor) end
+      rescue ThreadError => e
+        logger.error _("Thread error during concurrent module deploy: %{message}") % {message: e.message}
+        Thread.exit
+      end
+    end
+  end
 
   def puppetfile_contents
     File.read(@puppetfile_path)

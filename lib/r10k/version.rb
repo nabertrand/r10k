@@ -1,3 +1,3 @@
 module R10K
-  VERSION = '2.6.3'
+  VERSION = '3.2.3'
 end

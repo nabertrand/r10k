@@ -132,13 +132,15 @@ describe R10K::Forge::ModuleRelease do
   describe "#cleanup_unpack_path" do
     it "ignores the unpack_path if it doesn't exist" do
       expect(unpack_path).to receive(:exist?).and_return false
-      expect(unpack_path).to_not receive(:rmtree)
+      expect(unpack_path).to_not receive(:parent)
       subject.cleanup_unpack_path
     end
 
-    it "removes the unpack_path if it exists" do
+    it "removes the containing directory of unpack_path if it exists" do
+      parent = instance_double('Pathname')
+      expect(parent).to receive(:rmtree)
       expect(unpack_path).to receive(:exist?).and_return true
-      expect(unpack_path).to receive(:rmtree)
+      expect(unpack_path).to receive(:parent).and_return(parent)
       subject.cleanup_unpack_path
     end
   end
@@ -146,13 +148,15 @@ describe R10K::Forge::ModuleRelease do
   describe "#cleanup_download_path" do
     it "ignores the download_path if it doesn't exist" do
       expect(download_path).to receive(:exist?).and_return false
-      expect(download_path).to_not receive(:delete)
+      expect(download_path).to_not receive(:parent)
       subject.cleanup_download_path
     end
 
-    it "removes the download_path if it exists" do
+    it "removes the containing directory of download_path if it exists" do
+      parent = instance_double('Pathname')
+      expect(parent).to receive(:rmtree)
       expect(download_path).to receive(:exist?).and_return true
-      expect(download_path).to receive(:delete)
+      expect(download_path).to receive(:parent).and_return(parent)
       subject.cleanup_download_path
     end
   end

@@ -46,10 +46,9 @@ For example:
 cachedir: '/var/cache/r10k'
 ```
 
-[prerun_command](http://docs.puppetlabs.com/references/latest/configuration.html#preruncommand)
 
 The cachedir setting defaults to `~/.r10k`. If the HOME environment variable is
-unset r10k will assume that r10k is being run with the Puppet [`prerun_command`][prerun_command]
+unset r10k will assume that r10k is being run with the Puppet [`prerun_command`](http://docs.puppetlabs.com/references/latest/configuration.html#preruncommand)
 setting and will set the cachedir default to `/root/.r10k`.
 
 ### proxy
@@ -73,6 +72,13 @@ proxy: 'http://user:password@proxy.example.com:3128'
 ```
 
 The proxy server being used will be logged at the "debug" level when r10k runs.
+
+### pool_size
+
+The pool_size setting is a number to determine how many threads should be spawn
+while updating modules. The default value is 1, which means the default behaviour
+is to update modules in a serial manner. Increasing this number should bring
+some performance gains.
 
 ### git
 
@@ -183,6 +189,9 @@ postrun: ['/usr/bin/curl', '-F', 'deploy=done', 'http://my-app.site/endpoint']
 ```
 
 The postrun setting can only be set once.
+
+Occurrences of the string `$modifiedenvs` in the postrun command will be
+replaced with the current environment(s) being deployed.
 
 ### sources
 

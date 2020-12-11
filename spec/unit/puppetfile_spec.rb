@@ -5,6 +5,25 @@ describe R10K::Puppetfile do
 
   subject do
     described_class.new(
+      '/some/nonexistent/basedir',
+      nil,
+      nil,
+      'Puppetfile.r10k'
+    )
+  end
+
+  describe "a custom puppetfile Puppetfile.r10k" do
+    it "is the basedir joined with '/Puppetfile.r10k' path" do
+      expect(subject.puppetfile_path).to eq '/some/nonexistent/basedir/Puppetfile.r10k'
+    end
+  end
+
+end
+
+describe R10K::Puppetfile do
+
+  subject do
+    described_class.new(
       '/some/nonexistent/basedir'
     )
   end
@@ -14,6 +33,13 @@ describe R10K::Puppetfile do
       expect(subject.moduledir).to eq '/some/nonexistent/basedir/modules'
     end
   end
+
+  describe "the default puppetfile" do
+    it "is the basedir joined with '/Puppetfile' path" do
+      expect(subject.puppetfile_path).to eq '/some/nonexistent/basedir/Puppetfile'
+    end
+  end
+
 
   describe "setting moduledir" do
     it "changes to given moduledir if it is an absolute path" do
@@ -168,6 +194,26 @@ describe R10K::Puppetfile do
       end
     end
 
+    it "rejects Puppetfiles with duplicate module names" do
+      path = File.join(PROJECT_ROOT, 'spec', 'fixtures', 'unit', 'puppetfile', 'duplicate-module-error')
+      pf_path = File.join(path, 'Puppetfile')
+      subject = described_class.new(path)
+      expect {
+        subject.load!
+      }.to raise_error(R10K::Error, /Puppetfiles cannot contain duplicate module names/i)
+    end
+
+    it "wraps and re-raises name errors" do
+      path = File.join(PROJECT_ROOT, 'spec', 'fixtures', 'unit', 'puppetfile', 'name-error')
+      pf_path = File.join(path, 'Puppetfile')
+      subject = described_class.new(path)
+      expect {
+        subject.load!
+      }.to raise_error do |e|
+        expect_wrapped_error(e, pf_path, NameError)
+      end
+    end
+
     it "accepts a forge module with a version" do
       path = File.join(PROJECT_ROOT, 'spec', 'fixtures', 'unit', 'puppetfile', 'valid-forge-with-version')
       pf_path = File.join(path, 'Puppetfile')
@@ -180,6 +226,25 @@ describe R10K::Puppetfile do
       pf_path = File.join(path, 'Puppetfile')
       subject = described_class.new(path)
       expect { subject.load! }.not_to raise_error
+    end
+
+    it "creates a git module and applies the default branch sepcified in the Puppetfile" do
+      path = File.join(PROJECT_ROOT, 'spec', 'fixtures', 'unit', 'puppetfile', 'default-branch-override')
+      pf_path = File.join(path, 'Puppetfile')
+      subject = described_class.new(path)
+      expect { subject.load! }.not_to raise_error
+      git_module = subject.modules[0]
+      expect(git_module.default_ref).to eq 'here_lies_the_default_branch'
+    end
+
+    it "creates a git module and applies the provided default_branch_override" do
+      path = File.join(PROJECT_ROOT, 'spec', 'fixtures', 'unit', 'puppetfile', 'default-branch-override')
+      pf_path = File.join(path, 'Puppetfile')
+      subject = described_class.new(path)
+      default_branch_override = 'default_branch_override_name'
+      expect { subject.load!(default_branch_override) }.not_to raise_error
+      git_module = subject.modules[0]
+      expect(git_module.default_ref).to eq default_branch_override
     end
   end
 
@@ -204,6 +269,31 @@ describe R10K::Puppetfile do
       expect(mod2).to receive(:accept).with(visitor)
 
       expect(subject).to receive(:modules).and_return([mod1, mod2])
+      subject.accept(visitor)
+    end
+
+    it "creates a thread pool to visit concurrently if pool_size setting is greater than one" do
+      pool_size = 3
+
+      subject.settings[:pool_size] = pool_size
+
+      visitor = spy('visitor')
+      expect(visitor).to receive(:visit) do |type, other, &block|
+        expect(type).to eq :puppetfile
+        expect(other).to eq subject
+        block.call
+      end
+
+      mod1 = spy('module')
+      expect(mod1).to receive(:accept).with(visitor)
+      mod2 = spy('module')
+      expect(mod2).to receive(:accept).with(visitor)
+
+      expect(subject).to receive(:modules).and_return([mod1, mod2])
+
+      expect(Thread).to receive(:new).exactly(pool_size).and_call_original
+      expect(Queue).to receive(:new).and_call_original
+
       subject.accept(visitor)
     end
   end
